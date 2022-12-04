@@ -1,0 +1,22 @@
+NAME: KAGGLE_NETHERLANDS
+TARGET: rent
+NUM:
+  - ID: __ignored__
+CATS:
+  - ID: city
+    TYPE: HASHING
+    BITS: 32
+  - ID: matchStatus
+    TYPE: BINARY_ONE
+
+#  - ID: descriptionTranslated
+#    TYPE: BINARY_KEYS
+#    KEYS: [["cheap", "expensive"]]
+EXCLUDE: ["id","title","postalCode","descriptionNonTranslated","descriptionTranslated", "latitude", "longitude","firstSeenAt",
+          "postedAgo", "rawAvailability",
+          "descriptionNonTranslated","internet",
+          "matchAge", "matchGender", "matchLanguages",
+          "coverImageUrl", "lastSeenAt",
+          "matchCapacity", "matchStatus", "gender",
+          "matchStatus", "smokingInside"]  # matchStatus ??
+EXCLUDE_AXIS: 1

@@ -1,0 +1,13 @@
+-clean data
+-scale data
+-re-create dataset
+-analyze correlation
+-meta parameters (hyperparameters)
+-run that bad boy
+
+
+####ideas
+
+
+
+absence of features (nan) to 0 - dynamic decision levariging on input absence
