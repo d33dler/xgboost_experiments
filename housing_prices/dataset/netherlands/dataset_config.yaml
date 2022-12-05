@@ -6,17 +6,28 @@ CATS:
   - ID: city
     TYPE: HASHING
     BITS: 32
+  - ID: matchAge
+    TYPE: HASHING
+    BITS: 32
+  - ID: matchStatus
+    TYPE: HASHING
   - ID: matchStatus
     TYPE: BINARY_ONE
-
 #  - ID: descriptionTranslated
 #    TYPE: BINARY_KEYS
 #    KEYS: [["cheap", "expensive"]]
+
+OUTLIERS: # (x,y)
+  - ID: areaSqm
+    INTERVAL: [0, 50]
+  - ID: rent
+    INTERVAL: [0, 2500]
+
+OUTLIER_OCCURANCES: ["city", "matchAge"]
+OUTLIER_THRESHOLD: 100
+
 EXCLUDE: ["id","title","postalCode","descriptionNonTranslated","descriptionTranslated", "latitude", "longitude","firstSeenAt",
           "postedAgo", "rawAvailability",
-          "descriptionNonTranslated","internet",
-          "matchAge", "matchGender", "matchLanguages",
-          "coverImageUrl", "lastSeenAt",
-          "matchCapacity", "matchStatus", "gender",
-          "matchStatus", "smokingInside"]  # matchStatus ??
+          "descriptionNonTranslated","matchLanguages",
+          "coverImageUrl", "lastSeenAt", "gender", "matchGender"]  # matchStatus ??
 EXCLUDE_AXIS: 1
