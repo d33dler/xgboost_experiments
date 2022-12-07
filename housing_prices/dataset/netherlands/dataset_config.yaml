@@ -11,8 +11,6 @@ CATS:
     BITS: 32
   - ID: matchStatus
     TYPE: HASHING
-  - ID: matchStatus
-    TYPE: BINARY_ONE
 #  - ID: descriptionTranslated
 #    TYPE: BINARY_KEYS
 #    KEYS: [["cheap", "expensive"]]

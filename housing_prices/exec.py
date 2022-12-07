@@ -100,26 +100,30 @@ def update_cols(data: List[pd.DataFrame], newcols: List[Tuple[pd.DataFrame, str]
 
 def optimize_hyperparams(train_x, train_y):
     params = {
-        'min_child_weight': [1, 5, 10],
-        'gamma': [0.5, 1, 1.5, 2, 5],
-        'subsample': [0.6, 0.8, 1.0],
+        'min_child_weight': [1, 2, 5],
+        'gamma': [1, 2, 5],
+        'subsample': [0.8, 1.0],
         'colsample_bytree': [0.6, 0.8, 1.0],
-        'max_depth': [20, 30, 40, 60],
-        'reg_alpha': [1e-5, 1e-2, 0.75],
-        'reg_lambda': [1e-5, 1e-2, 0.45],
-        'learning_rate': [0.02, 0.03, 0.05],
-        'n_estimators': [64, 108],
+        'max_depth': [8, 10, 12, 16],
+        'reg_lambda': [1e-2, 0.45],
+        'learning_rate': [0.02, 0.05, 0.7],
+        'n_estimators': [108, 216, 512],
     }
     folds = 5
     param_comb = 3
     skf = StratifiedKFold(n_splits=folds, shuffle=True, random_state=1001)
 
     reg = xgb.XGBRegressor(learning_rate=0.02, n_estimators=400, objective='reg:squarederror',
-                           silent=False, nthread=6, tree_method='gpu_hist', enable_categorical=True, eval_metric='mae')
+                           silent=False, nthread=6, tree_method='hist', enable_categorical=True, eval_metric='mae')
 
     random_search = RandomizedSearchCV(reg, param_distributions=params, n_iter=param_comb,
                                        scoring='neg_mean_absolute_error', n_jobs=4,
-                                       cv=skf.split(train_x, train_y), verbose=3, random_state=1001)
+                                       cv=skf.split(train_x, train_y), verbose=3, random_state=666)
+
+    random_search.fit(train_x, train_y)
+    print(random_search.best_params_)
+    print(random_search.best_score_)
+    print("BEST EST: ",random_search.best_estimator_)
     return random_search
 
 
@@ -163,8 +167,8 @@ def execute(_argz):
     print(train_ds.shape)
     print("REPLACEMENTS")
     [print(train_ds[col].unique()) for col in ds_cfg.OUTLIER_OCCURANCES]
-    #train_ds["dist_cc"] = train_ds.apply(lambda x: update_distances(x, cities_ds), axis=1)
-    #testing_ds["dist_cc"] = testing_ds.apply(lambda x: update_distances(x, cities_ds), axis=1)
+    train_ds["dist_cc"] = train_ds.apply(lambda x: update_distances(x, cities_ds), axis=1)
+    testing_ds["dist_cc"] = testing_ds.apply(lambda x: update_distances(x, cities_ds), axis=1)
 
     testings_ids = testing_ds["id"].copy()
     train_ds.drop(ds_cfg.EXCLUDE, axis=ds_cfg.EXCLUDE_AXIS, inplace=True)
@@ -203,27 +207,27 @@ def execute(_argz):
     ##############################################
     # Hyper-parameter tuning
     X_train, X_test, y_train, y_test = train_test_split(train_X, train_Y, test_size=0.0001, random_state=666)
-    # reg = optimize_hyperparams(X_train, y_train)
+    reg = optimize_hyperparams(X_train, y_train)
     ##############################################
-
-    reg: XGBModel = xgb.XGBRegressor(tree_method="gpu_hist",
+    exit(0)
+    reg: XGBModel = xgb.XGBRegressor(tree_method="hist",
                                      objective='reg:squarederror',
                                      enable_categorical=True,
                                      eval_metric='mae',
                                      max_cat_to_onehot=5,
                                      max_depth=16,
-                                     min_child_weight=1.5,
+                                     min_child_weight=1,
                                      gamma=4,
                                      eta=0.01,
                                      learning_rate=0.05,
                                      subsample=1,
                                      seed=666,
-                                     n_estimators=1024,
+                                     n_estimators=512,
                                      early_stoping_rounds=5,
                                      colsample_bytree=0.8)
 
     ################################################################
-    reg.fit(X_train, y_train, eval_set=[(X_train, y_train)], verbose=True)
+    reg.fit(X_train, y_train, eval_set=[(X_train, y_train)])
 
     # print(sorted(reg.get_booster().get_score(importance_type='gain'),key=lambda x:x[1], reverse=True))
     # reg_results = np.array(reg.evals_result()["validation_0"]["rmse"])
