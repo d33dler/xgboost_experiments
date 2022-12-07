@@ -1,5 +1,7 @@
+import time
 from argparse import ArgumentParser
 from typing import Tuple, List
+
 import geopy.distance
 import matplotlib.pyplot as plt
 import numpy as np  # linear algebra
@@ -7,13 +9,14 @@ import pandas as pd  # data processing, CSV file I/O (e.g. pd.read_csv)
 import xgboost as xgb
 import yaml
 from easydict import EasyDict
-from pandas.core.generic import NDFrame
+from hyperopt import hp, STATUS_OK
+from hyperopt import fmin, tpe
+from hyperopt.pyll import scope
 from sklearn.feature_extraction import FeatureHasher
-from sklearn.metrics import mean_absolute_error
-from sklearn.model_selection import StratifiedKFold, RandomizedSearchCV
+from sklearn.metrics import mean_absolute_error, roc_auc_score
 from sklearn.model_selection import train_test_split  # Perforing grid search
-from xgboost import XGBModel, plot_tree
-
+from xgboost import XGBModel
+import mlflow
 
 def load_data(data: List[str]):
     return [pd.read_csv(d, header=0) for d in data]
@@ -98,33 +101,58 @@ def update_cols(data: List[pd.DataFrame], newcols: List[Tuple[pd.DataFrame, str]
     return output
 
 
-def optimize_hyperparams(train_x, train_y):
-    params = {
-        'min_child_weight': [1, 2, 5],
-        'gamma': [1, 2, 5],
-        'subsample': [0.8, 1.0],
-        'colsample_bytree': [0.6, 0.8, 1.0],
-        'max_depth': [8, 10, 12, 16],
-        'reg_lambda': [1e-2, 0.45],
-        'learning_rate': [0.02, 0.05, 0.7],
-        'n_estimators': [108, 216, 512],
+def optimize_hyperparams(train_X, train_Y):
+    search_space = {
+        'learning_rate': hp.loguniform('learning_rate', 0.1, 0.7),
+        'max_depth': scope.int(hp.uniform('max_depth', 1, 18)),
+        'eta': hp.quniform('eta', 0.01, 1),
+        'min_child_weight': hp.loguniform('min_child_weight', 1, 5),
+        'subsample': hp.uniform('subsample', 0.5, 1),
+        'colsample_bytree': hp.uniform('colsample_bytree', 0.5, 1),
+        'gamma': hp.loguniform('gamma',  1, 10),
+        'alpha': hp.loguniform('alpha', 0.1, 5),
+        'lambda': hp.loguniform('lambda', 0.1, 5),
+        'objective': 'reg:squarederror',
+        'eval_metric': 'mae',
+        'seed': 123,
     }
-    folds = 5
-    param_comb = 3
-    skf = StratifiedKFold(n_splits=folds, shuffle=True, random_state=1001)
 
-    reg = xgb.XGBRegressor(learning_rate=0.02, n_estimators=400, objective='reg:squarederror',
-                           silent=False, nthread=6, tree_method='hist', enable_categorical=True, eval_metric='mae')
+    X_train, X_test, y_train, y_test = train_test_split(train_X, train_Y, test_size=0.25, random_state=666)
 
-    random_search = RandomizedSearchCV(reg, param_distributions=params, n_iter=param_comb,
-                                       scoring='neg_mean_absolute_error', n_jobs=4,
-                                       cv=skf.split(train_x, train_y), verbose=3, random_state=666)
+    train = xgb.DMatrix(data=X_train, label=y_train)
+    test = xgb.DMatrix(data=X_test, label=y_test)
 
-    random_search.fit(train_x, train_y)
-    print(random_search.best_params_)
-    print(random_search.best_score_)
-    print("BEST EST: ",random_search.best_estimator_)
-    return random_search
+    def train_model(params):
+        # With MLflow autologging, hyperparameters and the trained model are automatically logged to MLflow.
+        mlflow.xgboost.autolog(silent=True)
+
+        # However, we can log additional information by using an MLFlow tracking context manager
+        with mlflow.start_run(nested=True):
+            # Train model and record run time
+            start_time = time.time()
+            booster = xgb.train(params=params, dtrain=train, num_boost_round=2048, evals=[(test, "test")],
+                                early_stopping_rounds=20, verbose_eval=False)
+            run_time = time.time() - start_time
+            mlflow.log_metric('runtime', run_time)
+
+            # Record AUC as primary loss for Hyperopt to minimize
+            predictions_test = booster.predict(test)
+            mae_score = mean_absolute_error(y_test, predictions_test)
+
+            # Set the loss to -1*auc_score so fmin maximizes the auc_score
+            return {'status': STATUS_OK, 'loss': mae_score, 'booster': booster.attributes()}
+
+    with mlflow.start_run(run_name='xgb_loss_threshold'):
+        best_params = fmin(
+            fn=train_model,
+            space=search_space,
+            algo=tpe.suggest,
+            loss_threshold=75,  # stop the grid search once we've reached an AUC of 0.92 or higher
+            timeout=60 * 10,  # stop after 5 minutes regardless if we reach an AUC of 0.92
+            # trials=spark_trials,
+            rstate=np.random.default_rng(666)
+        )
+    return best_params
 
 
 def update_distances(data, cities_ds):
@@ -150,10 +178,9 @@ def execute(_argz):
     ##################################
     print(ds_cfg)
     y_target = ds_cfg.TARGET
-    train_ds.fillna(0, inplace=True)
-    testing_ds.fillna(0, inplace=True)
-    print("Original training dataset size:", train_ds.shape)
-    print("TESTING: ", testing_ds.shape)
+    print("-------------FILLING MISSING DATA-------------")
+    train_ds.fillna("Missing", inplace=True)
+    testing_ds.fillna("Missing", inplace=True)
     for col in ds_cfg.OUTLIER_OCCURANCES:
         majority, outliers = get_outliers(train_ds, col, ds_cfg)
         test_maj, test_outl = get_outliers(testing_ds, col, ds_cfg)
@@ -163,10 +190,10 @@ def execute(_argz):
             outliers[col] = test_outl[col] = 0
         train_ds = pd.concat([majority, outliers], ignore_index=True)
         testing_ds = pd.concat([test_maj, test_outl], ignore_index=True)
-    print("TESTING:", testing_ds.shape)
-    print(train_ds.shape)
-    print("REPLACEMENTS")
+    print("--------------HASHED FEATURES----------------")
     [print(train_ds[col].unique()) for col in ds_cfg.OUTLIER_OCCURANCES]
+
+
     train_ds["dist_cc"] = train_ds.apply(lambda x: update_distances(x, cities_ds), axis=1)
     testing_ds["dist_cc"] = testing_ds.apply(lambda x: update_distances(x, cities_ds), axis=1)
 
@@ -206,8 +233,9 @@ def execute(_argz):
     print(train_X.info(verbose=True))
     ##############################################
     # Hyper-parameter tuning
-    X_train, X_test, y_train, y_test = train_test_split(train_X, train_Y, test_size=0.0001, random_state=666)
-    reg = optimize_hyperparams(X_train, y_train)
+
+    best_params = optimize_hyperparams(train_X, train_Y)
+    print(best_params)
     ##############################################
     exit(0)
     reg: XGBModel = xgb.XGBRegressor(tree_method="hist",
@@ -227,7 +255,7 @@ def execute(_argz):
                                      colsample_bytree=0.8)
 
     ################################################################
-    reg.fit(X_train, y_train, eval_set=[(X_train, y_train)])
+    #  <<<  reg.fit(X_train, y_train, eval_set=[(X_train, y_train)])
 
     # print(sorted(reg.get_booster().get_score(importance_type='gain'),key=lambda x:x[1], reverse=True))
     # reg_results = np.array(reg.evals_result()["validation_0"]["rmse"])
