@@ -29,5 +29,5 @@ OUTLIER_THRESHOLD: 100
 EXCLUDE: ["id","title","postalCode","descriptionNonTranslated","descriptionTranslated", "latitude", "longitude","firstSeenAt",
           "postedAgo", "rawAvailability","kitchen",
           "descriptionNonTranslated","matchLanguages",
-          "coverImageUrl", "lastSeenAt"]  # matchStatus ??
+          "coverImageUrl", "lastSeenAt"]
 EXCLUDE_AXIS: 1
