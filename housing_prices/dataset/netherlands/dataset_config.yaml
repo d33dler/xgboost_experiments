@@ -9,7 +9,11 @@ CATS:
   - ID: matchAge
     TYPE: HASHING
     BITS: 32
-  - ID: matchStatus
+  - ID: roommates
+    TYPE: HASHING
+  - ID: energyLabel
+    TYPE: HASHING
+  - ID: matchCapacity
     TYPE: HASHING
 #  - ID: descriptionTranslated
 #    TYPE: BINARY_KEYS
@@ -17,15 +21,13 @@ CATS:
 
 OUTLIERS: # (x,y)
   - ID: areaSqm
-    INTERVAL: [0, 50]
-  - ID: rent
-    INTERVAL: [0, 2500]
+    INTERVAL: [0, 75]
 
 OUTLIER_OCCURANCES: ["city", "matchAge"]
 OUTLIER_THRESHOLD: 100
 
 EXCLUDE: ["id","title","postalCode","descriptionNonTranslated","descriptionTranslated", "latitude", "longitude","firstSeenAt",
-          "postedAgo", "rawAvailability",
+          "postedAgo", "rawAvailability","kitchen",
           "descriptionNonTranslated","matchLanguages",
-          "coverImageUrl", "lastSeenAt", "gender", "matchGender"]  # matchStatus ??
+          "coverImageUrl", "lastSeenAt"]  # matchStatus ??
 EXCLUDE_AXIS: 1

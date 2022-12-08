@@ -18,6 +18,7 @@ from sklearn.model_selection import train_test_split  # Perforing grid search
 from xgboost import XGBModel
 import mlflow
 
+
 def load_data(data: List[str]):
     return [pd.read_csv(d, header=0) for d in data]
 
@@ -28,10 +29,10 @@ def transform_data(data):
 
 def clean_dataset(ax: plt.Axes, data: pd.DataFrame, cols: List[str], intervals: List[Tuple[float, float]]):
     ax.set_xlabel(cols[0])
-    ax.set_ylabel(cols[1])
+    #ax.set_ylabel(cols[1])
     data = data[(data[cols[0]] > intervals[0][0]) & (data[cols[0]] < intervals[0][1])]
-    data = data[(data[cols[1]] > intervals[1][0]) & (data[cols[1]] < intervals[1][1])]
-    ax.scatter(data[cols[0]], data[cols[1]], c="green", marker="s")
+    #data = data[(data[cols[1]] > intervals[1][0]) & (data[cols[1]] < intervals[1][1])]
+#    ax.scatter(data[cols[0]], data[cols[1]], c="green", marker="s")
     return data
 
 
@@ -105,11 +106,11 @@ def optimize_hyperparams(train_X, train_Y):
     search_space = {
         'learning_rate': hp.loguniform('learning_rate', 0.1, 0.7),
         'max_depth': scope.int(hp.uniform('max_depth', 1, 18)),
-        'eta': hp.quniform('eta', 0.01, 1),
+        'eta': hp.quniform('eta', 0.01, 1, 0.1),
         'min_child_weight': hp.loguniform('min_child_weight', 1, 5),
         'subsample': hp.uniform('subsample', 0.5, 1),
         'colsample_bytree': hp.uniform('colsample_bytree', 0.5, 1),
-        'gamma': hp.loguniform('gamma',  1, 10),
+        'gamma': hp.loguniform('gamma', 1, 10),
         'alpha': hp.loguniform('alpha', 0.1, 5),
         'lambda': hp.loguniform('lambda', 0.1, 5),
         'objective': 'reg:squarederror',
@@ -128,18 +129,15 @@ def optimize_hyperparams(train_X, train_Y):
 
         # However, we can log additional information by using an MLFlow tracking context manager
         with mlflow.start_run(nested=True):
-            # Train model and record run time
             start_time = time.time()
             booster = xgb.train(params=params, dtrain=train, num_boost_round=2048, evals=[(test, "test")],
                                 early_stopping_rounds=20, verbose_eval=False)
             run_time = time.time() - start_time
             mlflow.log_metric('runtime', run_time)
 
-            # Record AUC as primary loss for Hyperopt to minimize
             predictions_test = booster.predict(test)
             mae_score = mean_absolute_error(y_test, predictions_test)
 
-            # Set the loss to -1*auc_score so fmin maximizes the auc_score
             return {'status': STATUS_OK, 'loss': mae_score, 'booster': booster.attributes()}
 
     with mlflow.start_run(run_name='xgb_loss_threshold'):
@@ -170,7 +168,17 @@ def get_outliers(train_ds, col, ds_cfg):
 
 
 def execute(_argz):
-    cfg = load_config(_argz.config)
+    """
+    Ugliest method I wrote so far.
+    Parameters
+    ----------
+    _argz :
+
+    Returns
+    -------
+
+    """
+    cfg = load_config(_argz.config)  # not used
     ds_cfg = load_config(_argz.ds_config)
     cities_ds = load_data([_argz.ds_cities])[0]
     train_ds, testing_ds = load_data([_argz.train_ds, _argz.test_ds])
@@ -178,9 +186,11 @@ def execute(_argz):
     ##################################
     print(ds_cfg)
     y_target = ds_cfg.TARGET
+
     print("-------------FILLING MISSING DATA-------------")
     train_ds.fillna("Missing", inplace=True)
     testing_ds.fillna("Missing", inplace=True)
+
     for col in ds_cfg.OUTLIER_OCCURANCES:
         majority, outliers = get_outliers(train_ds, col, ds_cfg)
         test_maj, test_outl = get_outliers(testing_ds, col, ds_cfg)
@@ -190,24 +200,30 @@ def execute(_argz):
             outliers[col] = test_outl[col] = 0
         train_ds = pd.concat([majority, outliers], ignore_index=True)
         testing_ds = pd.concat([test_maj, test_outl], ignore_index=True)
-    print("--------------HASHED FEATURES----------------")
     [print(train_ds[col].unique()) for col in ds_cfg.OUTLIER_OCCURANCES]
 
-
+    ###########################################################################
+    # ADDING EXTRA FEATURE - Geodesic distance to city center
     train_ds["dist_cc"] = train_ds.apply(lambda x: update_distances(x, cities_ds), axis=1)
     testing_ds["dist_cc"] = testing_ds.apply(lambda x: update_distances(x, cities_ds), axis=1)
+    ###########################################################################
 
     testings_ids = testing_ds["id"].copy()
+
+    ##########################################################################
+    # DROPPING IRRELEVANT FEATURES
     train_ds.drop(ds_cfg.EXCLUDE, axis=ds_cfg.EXCLUDE_AXIS, inplace=True)
     testing_ds.drop(ds_cfg.EXCLUDE, axis=ds_cfg.EXCLUDE_AXIS, inplace=True)
 
+    ##########################################################################
+    # OUTLIER DATASET CLEANING
     scatters = plt.figure()
     scatter_axes = scatters.add_subplot(111)
-
     clean_dataset(scatter_axes, train_ds, [o.ID for o in ds_cfg.OUTLIERS], [o.INTERVAL for o in ds_cfg.OUTLIERS])
 
     cats_dict = {o.ID: o for o in ds_cfg.CATS}
     split = [train_ds, testing_ds]
+    print("---------HASHING FEATURES & SETTING CATEGORICAL DATA----------")
     for label in train_ds.columns:
         if train_ds[label].dtype == object:
             if label in cats_dict:
@@ -223,41 +239,50 @@ def execute(_argz):
             else:
                 change_type(split, label=label, dtype='category')
 
-    ##############################################
-
+    ########################################################
+    # SPLIT DATASET SOURCE(X) AND TARGET(Y) FEATURES
     train_X = train_ds.drop([y_target], axis=ds_cfg.EXCLUDE_AXIS, inplace=False)
     train_Y = train_ds[ds_cfg.TARGET]
     train_X = pd.get_dummies(train_X)
     testing_ds = pd.get_dummies(testing_ds)
 
     print(train_X.info(verbose=True))
-    ##############################################
-    # Hyper-parameter tuning
+    ######################################################
+    # HYPER-PARAM FINE TUNING
 
-    best_params = optimize_hyperparams(train_X, train_Y)
-    print(best_params)
-    ##############################################
-    exit(0)
+    # best_params = optimize_hyperparams(train_X, train_Y)
+    # print(best_params)
+
+    #######################################################
+    # OPTIONAL DATA SPLIT
+    # X_train, X_test, y_train, y_test = train_test_split(train_X, train_Y, test_size=0.5, random_state=1337)
+
     reg: XGBModel = xgb.XGBRegressor(tree_method="hist",
                                      objective='reg:squarederror',
                                      enable_categorical=True,
                                      eval_metric='mae',
                                      max_cat_to_onehot=5,
-                                     max_depth=16,
-                                     min_child_weight=1,
+                                     max_depth=17,
+                                     min_child_weight=1.5,
                                      gamma=4,
                                      eta=0.01,
-                                     learning_rate=0.05,
+                                     learning_rate=0.04,
                                      subsample=1,
+                                     reg_lambda=0.5,
                                      seed=666,
-                                     n_estimators=512,
+                                     n_estimators=1024,
                                      early_stoping_rounds=5,
                                      colsample_bytree=0.8)
 
     ################################################################
-    #  <<<  reg.fit(X_train, y_train, eval_set=[(X_train, y_train)])
+    # MODEL TRAINING
+    reg.fit(train_X, train_Y, eval_set=[(train_X, train_Y)])
 
-    # print(sorted(reg.get_booster().get_score(importance_type='gain'),key=lambda x:x[1], reverse=True))
+    ################################################################
+    # DEBUGGING, EVALUATION & PLOTTING
+    ################################################################
+    # print(reg.get_booster().get_score(importance_type='gain'))
+    # [print(o) for o in sorted(reg.get_booster().get_score(importance_type='gain'), key=lambda x:x[1], reverse=True)]
     # reg_results = np.array(reg.evals_result()["validation_0"]["rmse"])
 
     # Convert to DMatrix for SHAP value
@@ -267,19 +292,22 @@ def execute(_argz):
     # np.testing.assert_allclose(
     #    np.sum(SHAP, axis=len(SHAP.shape) - 1), margin, rtol=1e-3
     # )
-    #pred_test =
+    # pred_test =
     # kfold = KFold(n_splits=10, random_state=7, shuffle=True)
     # results = cross_val_score(reg, train_X, train_Y, cv=kfold)
     # print("Accuracy: %.2f%% (%.2f%%)" % (results.mean() * 100, results.std() * 100))
-    print(
-        f"mAE: {mean_absolute_error(y_test, reg.get_booster().predict(xgb.DMatrix(X_test, enable_categorical=True)))}")
-    #tree_fig = plt.figure()
-    #tree_ax = tree_fig.add_subplot(111)
+    # print(
+    #    f"mAE: {mean_absolute_error(y_test, reg.get_booster().predict(xgb.DMatrix(X_test, enable_categorical=True)))}")
 
-    #plot_tree(reg, num_trees=1, rankdir='LR', ax=tree_ax)
+    # tree_fig = plt.figure()
+    # tree_ax = tree_fig.add_subplot(111)
 
+    # plot_tree(reg, num_trees=1, rankdir='LR', ax=tree_ax)
+    #################################################################
+    # OUTPUT
+    #################################################################
     pred_test = reg.get_booster().predict(xgb.DMatrix(testing_ds, enable_categorical=True))
-    print(pred_test)
+    print("-----------PREDICTION PIPELINE COMPLETED-------------")
     pd.DataFrame({'id': testings_ids, 'rent': np.round(pred_test)}).to_csv("submission_test.csv", index=False)
 
 
